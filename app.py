@@ -107,6 +107,9 @@ downloaded_pdf_path = None
 current_filtered_df = None
 current_excel_path = None
 imported_pdf_file = False
+save_logs_var = None
+current_conference_date = ""
+username = os.environ.get("USERNAME", "")
 
 def get_selected_lexis_version():
     try:
@@ -899,16 +902,7 @@ def start_export_in_background(preview_window, export_button):
 
     export_button.config(state="disabled")
 
-    def ask_to_save_logs():
-        answer = Messagebox.yesno(
-            message="Would you like to save the search logs?",
-            title="Save Logs",
-            parent=progress
-        )
-
-        if answer != "Yes":
-            return
-
+    def save_logs_to_file():
         file_path = filedialog.asksaveasfilename(
             title="Save Search Logs",
             defaultextension=".txt",
@@ -925,10 +919,9 @@ def start_export_in_background(preview_window, export_button):
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(log_text)
 
-            Messagebox.show_info(
-                message="Search logs saved successfully.",
-                title="Logs Saved",
-                parent=progress
+            show_windows_toast(
+                "Logs Saved",
+                f"Saved to: {os.path.basename(file_path)}"
             )
 
         except Exception as e:
@@ -937,6 +930,7 @@ def start_export_in_background(preview_window, export_button):
                 title="Save Logs Error",
                 parent=progress
             )
+    
 
     def update_progress(message):
         def update_ui():
@@ -999,7 +993,13 @@ def start_export_in_background(preview_window, export_button):
                 f"Runtime: {runtime_text}"
                 )
 
-                ask_to_save_logs()
+                try:
+                    should_save_logs = save_logs_var and save_logs_var.get()
+                except Exception:
+                    should_save_logs = False
+
+                if should_save_logs:
+                    save_logs_to_file()
 
                 root.after(1500, cleanup)
 
@@ -1025,6 +1025,7 @@ def start_export_in_background(preview_window, export_button):
 def show_dataframe_preview(df):
     global current_filtered_df
     global lexis_plus_var
+    global save_logs_var
 
     preview = tb.Toplevel(root)
     preview.title("Data Preview")
@@ -1344,6 +1345,16 @@ def show_dataframe_preview(df):
     )
     lexis_label.pack(side=LEFT, padx=5)
 
+    save_logs_var = tk.BooleanVar(value=False)
+
+    save_logs_check = tb.Checkbutton(
+        button_frame,
+        text="Save Logs",
+        variable=save_logs_var,
+        bootstyle="round-toggle"
+    )
+    save_logs_check.pack(side=LEFT, padx=5)
+
     for i, action_type in enumerate(action_types):
         var = tk.BooleanVar(value=False)
         action_vars[action_type] = var
@@ -1421,6 +1432,9 @@ def download_selected_pdf():
     global current_filtered_df
     global imported_pdf_file
     imported_pdf_file = False
+    global current_conference_date
+
+    
 
     selected = tree.selection()
 
@@ -1435,6 +1449,8 @@ def download_selected_pdf():
 
     date_text = values[0]
     url = values[1]
+
+    current_conference_date = date_text
 
     try:
         response = requests.get(url, timeout=30)
@@ -1502,7 +1518,7 @@ def convert_preview_downloaded_pdf():
         Messagebox.show_error(str(e), "Error")
 
 
-def format_excel_file(excel_path):
+def format_excel_file(excel_path, header_row=5, last_row=None):
     from openpyxl import load_workbook
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
@@ -1510,13 +1526,17 @@ def format_excel_file(excel_path):
     wb = load_workbook(excel_path)
     ws = wb.active
 
+    if last_row is None:
+        last_row = ws.max_row
+
     # Freeze header row
-    ws.freeze_panes = "A2"
+    # ws.freeze_panes = "A2"
 
     # Add filters
-    ws.auto_filter.ref = ws.dimensions
+    # ws.auto_filter.ref = ws.dimensions
 
     # Fills
+    
     header_fill = PatternFill(
         fill_type="solid",
         start_color="F46036",
@@ -1573,7 +1593,35 @@ def format_excel_file(excel_path):
     )
 
     # Header formatting
-    for cell in ws[1]:
+    HEADER_ROW = header_row
+
+    first_info_row = HEADER_ROW - 4
+    last_info_row = HEADER_ROW - 2
+
+    for row in (HEADER_ROW - 4, HEADER_ROW - 3, HEADER_ROW - 2):
+        cell = ws[f"A{row}"]
+
+        cell.fill = header_fill
+
+        cell.font = Font(
+            bold=True,
+            color="FFFFFF",
+            size=12
+        )
+
+        cell.alignment = Alignment(
+            horizontal="left",
+            vertical="center"
+        )
+
+        cell.border = Border(
+            left=medium,
+            right=medium,
+            top=medium if row == first_info_row else thin,
+            bottom=medium if row == last_info_row else thin
+        )
+
+    for cell in ws[HEADER_ROW]:
         cell.font = Font(
             bold=True,
             color="FFFFFF"
@@ -1586,7 +1634,10 @@ def format_excel_file(excel_path):
         cell.border = header_border
 
     # Apply borders and alignment to all cells
-    for row in ws.iter_rows(min_row=2):
+    for row in ws.iter_rows(
+        min_row=HEADER_ROW + 1,
+        max_row=last_row
+    ):
         for cell in row:
             cell.border = normal_border
             cell.alignment = Alignment(
@@ -1596,7 +1647,10 @@ def format_excel_file(excel_path):
             )
 
     # Alternate row shading
-    for row_num in range(2, ws.max_row + 1):
+    for row_num in range(
+        HEADER_ROW + 1,
+        last_row + 1
+    ):
         if row_num % 2 == 0:
             for cell in ws[row_num]:
                 cell.fill = gray_fill
@@ -1605,7 +1659,9 @@ def format_excel_file(excel_path):
     lexis_cite_col = None
     links_col = None
 
-    for cell in ws[1]:
+    HEADER_ROW = header_row
+
+    for cell in ws[HEADER_ROW]:
         if cell.value == "Lexis Cite":
             lexis_cite_col = cell.column
         elif cell.value == "Links":
@@ -1613,7 +1669,7 @@ def format_excel_file(excel_path):
 
     # Highlight blank Lexis Cite cells
     if lexis_cite_col:
-        for row in range(2, ws.max_row + 1):
+        for row in range(HEADER_ROW + 1, last_row + 1):
             cell = ws.cell(row=row, column=lexis_cite_col)
 
             value = "" if cell.value is None else str(cell.value).strip()
@@ -1629,7 +1685,7 @@ def format_excel_file(excel_path):
 
     # Make links clickable and cleaner
     if links_col:
-        for row in range(2, ws.max_row + 1):
+        for row in range(HEADER_ROW + 1, last_row + 1):
             cell = ws.cell(row=row, column=links_col)
 
             if cell.value:
@@ -1704,9 +1760,76 @@ def export_current_preview_to_excel(preview_window=None, progress_callback=None)
     df["Source"] = number_key.map(source_used)
     df["Links"] = number_key.map(links_by_case)
 
-    df.to_excel(current_excel_path, index=False)
+    file_exists = os.path.exists(current_excel_path)
 
-    format_excel_file(current_excel_path)
+    if file_exists:
+        wb = load_workbook(current_excel_path)
+        ws = wb.active
+
+        startrow = ws.max_row + 4
+
+        ws[f"A{startrow + 1}"] = os.environ.get("USERNAME", "")
+        ws[f"A{startrow + 2}"] = (
+            f"Conference Results for {current_conference_date}"
+        )
+        ws[f"A{startrow + 3}"] = (
+            "Last Run: "
+            + datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
+        )
+
+        wb.save(current_excel_path)
+
+        with pd.ExcelWriter(
+            current_excel_path,
+            engine="openpyxl",
+            mode="a",
+            if_sheet_exists="overlay"
+        ) as writer:
+            df.to_excel(
+                writer,
+                index=False,
+                header=True,
+                startrow=startrow + 4
+            )
+        header_row = startrow + 5
+        first_data_row = header_row + 1
+        last_row = first_data_row + len(df) - 1
+
+        format_excel_file(
+            current_excel_path,
+            header_row=header_row,
+            last_row=last_row
+        )
+
+    else:
+        with pd.ExcelWriter(
+            current_excel_path,
+            engine="openpyxl"
+        ) as writer:
+            df.to_excel(
+                writer,
+                index=False,
+                startrow=4
+            )
+
+            ws = writer.book.active
+
+            ws["A1"] = os.environ.get("USERNAME", "")
+            ws["A2"] = f"Conference Results for {current_conference_date}"
+            ws["A3"] = (
+                "Last Run: "
+                + datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
+            )
+
+        header_row = 5
+        first_data_row = 6
+        last_row = first_data_row + len(df) - 1
+
+        format_excel_file(
+            current_excel_path,
+            header_row=header_row,
+            last_row=last_row
+        )
 
     if (
         downloaded_pdf_path
