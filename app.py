@@ -1407,6 +1407,7 @@ def import_pdf_file():
     global current_excel_path
     global current_filtered_df
     global imported_pdf_file
+    global current_conference_date
     imported_pdf_file = True
 
     file_path = filedialog.askopenfilename(
@@ -1421,6 +1422,18 @@ def import_pdf_file():
     current_filtered_df = None
 
     safe_name = Path(file_path).stem
+    match = re.search(r"(\d{6})$", safe_name)
+
+    if match:
+        try:
+            current_conference_date = datetime.strptime(
+                match.group(1),
+                "%m%d%y"
+            ).strftime("%m/%d/%Y")
+        except ValueError:
+            current_conference_date = safe_name
+    else:
+        current_conference_date = safe_name
 
     current_excel_path = None
 
